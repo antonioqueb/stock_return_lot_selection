@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
+import logging
 from odoo import models, fields, api, _
 from odoo.exceptions import UserError
 from odoo.tools.float_utils import float_compare
 import json
+
+_logger = logging.getLogger(__name__)
 
 
 class StockReturnPickingLine(models.TransientModel):
@@ -27,6 +30,7 @@ class StockReturnPickingLine(models.TransientModel):
         string='Rastreo por Lote',
         readonly=True,
     )
+    # JSON: {"lot_id_str": qty, ...}
     lot_qty_json = fields.Text(
         string='Cantidades por Lote',
     )
@@ -45,26 +49,56 @@ class StockReturnPickingLine(models.TransientModel):
     @api.onchange('lot_ids')
     def _onchange_lot_ids(self):
         for line in self:
+            _logger.info(
+                '[LOT_RETURN] onchange lot_ids fired. '
+                'is_lot_tracked=%s, lot_ids=%s, lot_qty_json=%s, move_id=%s',
+                line.is_lot_tracked,
+                line.lot_ids.ids if line.lot_ids else [],
+                line.lot_qty_json,
+                line.move_id.id if line.move_id else False,
+            )
+
             if not line.is_lot_tracked:
                 continue
+
             if not line.lot_ids:
                 line.quantity = 0.0
                 line.to_return = False
+                _logger.info('[LOT_RETURN] No lots selected, qty=0')
                 continue
 
-            lot_qty_map = self._get_lot_qty_map(line)
+            # Intentar obtener cantidades del JSON pre-calculado
+            lot_qty_map = {}
+            if line.lot_qty_json:
+                try:
+                    lot_qty_map = json.loads(line.lot_qty_json)
+                    _logger.info('[LOT_RETURN] lot_qty_map from JSON: %s', lot_qty_map)
+                except (json.JSONDecodeError, TypeError) as e:
+                    _logger.warning('[LOT_RETURN] Failed to parse lot_qty_json: %s', e)
+
             total = 0.0
             for lot in line.lot_ids:
                 lot_key = str(lot.id)
+                qty = 0.0
+
                 if lot_key in lot_qty_map:
-                    total += lot_qty_map[lot_key]
+                    qty = lot_qty_map[lot_key]
+                    _logger.info('[LOT_RETURN] Lot %s (id=%s) from JSON: qty=%s', lot.name, lot.id, qty)
                 elif line.move_id:
+                    # Fallback: buscar en move_lines
                     mls = line.move_id.move_line_ids.filtered(
-                        lambda ml: ml.lot_id.id == lot.id and ml.state == 'done'
+                        lambda ml, l=lot: ml.lot_id.id == l.id and ml.state == 'done'
                     )
-                    total += sum(mls.mapped('quantity'))
+                    qty = sum(mls.mapped('quantity'))
+                    _logger.info('[LOT_RETURN] Lot %s (id=%s) from move_lines fallback: qty=%s', lot.name, lot.id, qty)
+                else:
+                    _logger.warning('[LOT_RETURN] Lot %s (id=%s) - no JSON and no move_id!', lot.name, lot.id)
+
+                total += qty
+
             line.quantity = total
             line.to_return = total > 0
+            _logger.info('[LOT_RETURN] Final quantity=%s, to_return=%s', total, line.to_return)
 
     @api.onchange('to_return')
     def _onchange_to_return(self):
@@ -74,14 +108,6 @@ class StockReturnPickingLine(models.TransientModel):
                     line.quantity = 0.0
                 elif line.lot_ids:
                     line._onchange_lot_ids()
-
-    def _get_lot_qty_map(self, line):
-        if line.lot_qty_json:
-            try:
-                return json.loads(line.lot_qty_json)
-            except (json.JSONDecodeError, TypeError):
-                pass
-        return {}
 
 
 class StockReturnPicking(models.TransientModel):
@@ -173,13 +199,19 @@ class StockReturnPicking(models.TransientModel):
             if not lot_ids_to_select:
                 continue
 
+            json_str = json.dumps(lot_qty_remaining)
+            _logger.info(
+                '[LOT_RETURN] default_get: move=%s, lots=%s, qty_json=%s, total=%s',
+                move_id, lot_ids_to_select, json_str, total_remaining,
+            )
+
             lot_vals = dict(vals)
             lot_vals.update({
                 'lot_ids': [(6, 0, lot_ids_to_select)],
                 'quantity': total_remaining,
                 'to_return': True,
                 'is_lot_tracked': True,
-                'lot_qty_json': json.dumps(lot_qty_remaining),
+                'lot_qty_json': json_str,
             })
             new_lines.append((0, 0, lot_vals))
 
@@ -216,7 +248,12 @@ class StockReturnPicking(models.TransientModel):
 
         move_lot_map = {}
         for line in active_lot_lines:
-            lot_qty_map = line._get_lot_qty_map(line)
+            lot_qty_map = {}
+            if line.lot_qty_json:
+                try:
+                    lot_qty_map = json.loads(line.lot_qty_json)
+                except (json.JSONDecodeError, TypeError):
+                    pass
 
             assignments = []
             for lot in line.lot_ids:
@@ -225,7 +262,7 @@ class StockReturnPicking(models.TransientModel):
                     qty = lot_qty_map[lot_key]
                 else:
                     mls = line.move_id.move_line_ids.filtered(
-                        lambda ml: ml.lot_id.id == lot.id and ml.state == 'done'
+                        lambda ml, l=lot: ml.lot_id.id == l.id and ml.state == 'done'
                     )
                     qty = sum(mls.mapped('quantity'))
 
