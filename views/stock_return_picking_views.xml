@@ -52,7 +52,7 @@
                     <field name="lot_id"
                            string="Lote / Serie"
                            options="{'no_create': True}"
-                           readonly="1"/>
+                           readonly="0"/>
 
                     <!-- Campos del lote - info visual rápida -->
                     <field name="lot_bloque" string="Bloque" optional="show"/>
