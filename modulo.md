@@ -1,3 +1,142 @@
+## ./__init__.py
+```py
+# -*- coding: utf-8 -*-
+from . import wizard
+```
+
+## ./__manifest__.py
+```py
+# -*- coding: utf-8 -*-
+{
+    'name': 'Devoluciones por Lote',
+    'version': '19.0.1.0.0',
+    'category': 'Inventory/Inventory',
+    'summary': 'Selección de lotes específicos en devoluciones de entregas',
+    'description': """
+Devoluciones por Lote
+=====================
+Extiende el wizard de devoluciones de Odoo para permitir seleccionar
+lotes específicos al devolver materiales desde entregas.
+
+Funcionalidades:
+- Al abrir el wizard de devolución, se muestran las líneas explotadas por lote
+- Cada lote muestra su cantidad entregada y datos relevantes (bloque, pedimento, dimensiones, etc.)
+- Se puede marcar con checkbox qué lotes devolver
+- La cantidad se auto-completa al seleccionar un lote
+- Compatible con productos rastreados por lote del módulo de inventario de piedra/mármol
+    """,
+    'author': 'Alphaqueb Consulting',
+    'website': 'https://www.alphaqueb.com',
+    'license': 'LGPL-3',
+    'depends': ['stock'],
+    'data': [
+        'views/stock_return_picking_views.xml',
+    ],
+    'depends': ['stock', 'stock_lot_dimensions'],
+    'installable': True,
+    'auto_install': False,
+    'application': False,
+}
+```
+
+## ./views/stock_return_picking_views.xml
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!--
+        Herencia de la vista del wizard de devolución de picking.
+        ID externo original: stock.view_stock_return_picking_form
+        Modelo: stock.return.picking
+
+        Estrategia:
+        - Reemplazar el tree de product_return_moves para agregar los campos de lote
+        - Agregar checkbox de selección, campo de lote y campos related
+        - Los campos de lote solo se muestran cuando el producto tiene tracking
+    -->
+    <record id="view_stock_return_picking_form_lot_selection" model="ir.ui.view">
+        <field name="name">stock.return.picking.form.lot.selection</field>
+        <field name="model">stock.return.picking</field>
+        <field name="inherit_id" ref="stock.view_stock_return_picking_form"/>
+        <field name="priority">20</field>
+        <field name="arch" type="xml">
+
+            <!-- Agregar indicador arriba del tree -->
+            <xpath expr="//field[@name='product_return_moves']" position="before">
+                <div invisible="not has_lot_products" class="alert alert-info mb-2" role="alert">
+                    <strong>📦 Productos con lotes detectados.</strong>
+                    Marque la casilla <strong>"Devolver"</strong> en los lotes que desea regresar.
+                    La cantidad se auto-completa.
+                </div>
+                <field name="has_lot_products" invisible="1"/>
+            </xpath>
+
+            <!-- Reemplazar el contenido del tree de product_return_moves -->
+            <xpath expr="//field[@name='product_return_moves']/list" position="replace">
+                <list editable="bottom"
+                      create="1"
+                      decoration-warning="not move_id"
+                      decoration-success="to_return and is_lot_tracked"
+                      decoration-muted="is_lot_tracked and not to_return">
+
+                    <!-- Campos originales (ocultos y técnicos) -->
+                    <field name="move_quantity" column_invisible="1"/>
+                    <field name="move_id" column_invisible="True"/>
+                    <field name="is_lot_tracked" column_invisible="1"/>
+                    <field name="lot_delivered_qty" column_invisible="1"/>
+
+                    <!-- Checkbox para devolver -->
+                    <field name="to_return" string="✓" width="40px"/>
+
+                    <!-- Producto -->
+                    <field name="product_id" force_save="1" readonly="is_lot_tracked"/>
+
+                    <!-- Lote -->
+                    <field name="lot_id"
+                           string="Lote / Serie"
+                           options="{'no_create': True}"
+                           readonly="0"/>
+
+                    <!-- Campos del lote - info visual rápida -->
+                    <field name="lot_bloque" string="Bloque" optional="show"/>
+                    <field name="lot_numero_placa" string="No. Placa" optional="show"/>
+                    <field name="lot_atado" string="Atado" optional="hide"/>
+                    <field name="lot_grosor" string="Grosor" optional="show"/>
+                    <field name="lot_alto" string="Alto" optional="hide"/>
+                    <field name="lot_ancho" string="Ancho" optional="hide"/>
+                    <field name="lot_peso" string="Peso" optional="hide"/>
+                    <field name="lot_color" string="Color" optional="hide"/>
+                    <field name="lot_pedimento" string="Pedimento" optional="hide"/>
+                    <field name="lot_contenedor" string="Contenedor" optional="hide"/>
+                    <field name="lot_origen" string="Origen" optional="hide"/>
+                    <field name="lot_proveedor" string="Proveedor" optional="hide"/>
+                    <field name="lot_tipo" string="Tipo" optional="hide"/>
+                    <field name="lot_detalles" string="Nota" optional="hide"/>
+
+                    <!-- Cantidad a devolver -->
+                    <field name="quantity"
+                           string="Cantidad a Devolver"
+                           decoration-danger="move_quantity &lt; quantity"/>
+
+                    <!-- UdM -->
+                    <field name="uom_id" widget="many2one_uom" groups="uom.group_uom"/>
+                </list>
+            </xpath>
+
+        </field>
+    </record>
+
+</odoo>
+```
+
+## ./wizard/__init__.py
+```py
+# -*- coding: utf-8 -*-
+from . import stock_picking_return
+```
+
+## ./wizard/stock_picking_return.py
+```py
 # -*- coding: utf-8 -*-
 from odoo import models, fields, api, _
 from odoo.exceptions import UserError
@@ -12,12 +151,6 @@ class StockReturnPickingLine(models.TransientModel):
         'stock.lot',
         string='Lote',
         help='Lote específico a devolver',
-    )
-    allowed_lot_ids = fields.Many2many(
-        'stock.lot',
-        string='Lotes permitidos',
-        compute='_compute_allowed_lot_ids',
-        help='Lotes que fueron entregados en este movimiento',
     )
     to_return = fields.Boolean(
         string='Devolver',
@@ -54,38 +187,7 @@ class StockReturnPickingLine(models.TransientModel):
         help='Indica si el producto se rastrea por lote',
     )
 
-    # ==================== COMPUTE ====================
-    @api.depends('move_id')
-    def _compute_allowed_lot_ids(self):
-        """Calcula los lotes permitidos: solo los del movimiento original."""
-        for line in self:
-            if line.move_id and line.move_id.product_id.tracking in ('lot', 'serial'):
-                done_lines = line.move_id.move_line_ids.filtered(
-                    lambda ml: ml.state == 'done' and ml.lot_id
-                )
-                line.allowed_lot_ids = done_lines.mapped('lot_id')
-            else:
-                line.allowed_lot_ids = False
-
     # ==================== ONCHANGE ====================
-    @api.onchange('lot_id')
-    def _onchange_lot_id(self):
-        """Al seleccionar un lote, auto-completar la cantidad entregada."""
-        for line in self:
-            if line.lot_id and line.move_id:
-                move_lines = line.move_id.move_line_ids.filtered(
-                    lambda ml: ml.lot_id == line.lot_id and ml.state == 'done'
-                )
-                qty = sum(move_lines.mapped('quantity'))
-                line.quantity = qty
-                line.lot_delivered_qty = qty
-                line.to_return = True
-                line.is_lot_tracked = True
-            elif not line.lot_id and line.is_lot_tracked:
-                line.quantity = 0.0
-                line.lot_delivered_qty = 0.0
-                line.to_return = False
-
     @api.onchange('to_return')
     def _onchange_to_return(self):
         """Al desmarcar, poner cantidad en 0. Al marcar, restaurar."""
@@ -116,6 +218,9 @@ class StockReturnPicking(models.TransientModel):
     def default_get(self, fields_list):
         """
         Extiende el default_get para explotar las líneas por lote.
+        
+        El wizard estándar crea una línea por stock.move (producto).
+        Nosotros la explotamos en N líneas: una por cada lote entregado.
         """
         res = super().default_get(fields_list)
 
@@ -159,10 +264,12 @@ class StockReturnPicking(models.TransientModel):
                 continue
 
             # === CON TRACKING POR LOTE ===
+            # Explotar por cada lote en las move_lines done
             done_move_lines = move.move_line_ids.filtered(
                 lambda ml: ml.state == 'done' and ml.lot_id
             )
 
+            # Agrupar por lote
             lot_qty_map = {}
             for ml in done_move_lines:
                 lot = ml.lot_id
@@ -303,4 +410,5 @@ class StockReturnPicking(models.TransientModel):
                     'location_id': move.location_id.id,
                     'location_dest_id': move.location_dest_id.id,
                     'company_id': move.company_id.id,
-                })
+                })```
+
