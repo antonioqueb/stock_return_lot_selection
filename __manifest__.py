@@ -24,6 +24,7 @@ Funcionalidades:
     'data': [
         'views/stock_return_picking_views.xml',
     ],
+    'depends': ['stock', 'stock_lot_dimensions'],
     'installable': True,
     'auto_install': False,
     'application': False,
