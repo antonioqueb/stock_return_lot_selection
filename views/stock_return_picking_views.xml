@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!--
+        Herencia de la vista del wizard de devolución de picking.
+        ID externo original: stock.view_stock_return_picking_form
+        Modelo: stock.return.picking
+
+        Estrategia:
+        - Reemplazar el tree de product_return_moves para agregar los campos de lote
+        - Agregar checkbox de selección, campo de lote y campos related
+        - Los campos de lote solo se muestran cuando el producto tiene tracking
+    -->
+    <record id="view_stock_return_picking_form_lot_selection" model="ir.ui.view">
+        <field name="name">stock.return.picking.form.lot.selection</field>
+        <field name="model">stock.return.picking</field>
+        <field name="inherit_id" ref="stock.view_stock_return_picking_form"/>
+        <field name="priority">20</field>
+        <field name="arch" type="xml">
+
+            <!-- Agregar indicador arriba del tree -->
+            <xpath expr="//field[@name='product_return_moves']" position="before">
+                <div invisible="not has_lot_products" class="alert alert-info mb-2" role="alert">
+                    <strong>📦 Productos con lotes detectados.</strong>
+                    Marque la casilla <strong>"Devolver"</strong> en los lotes que desea regresar.
+                    La cantidad se auto-completa.
+                </div>
+                <field name="has_lot_products" invisible="1"/>
+            </xpath>
+
+            <!-- Reemplazar el contenido del tree de product_return_moves -->
+            <xpath expr="//field[@name='product_return_moves']/list" position="replace">
+                <list editable="bottom"
+                      create="1"
+                      decoration-warning="not move_id"
+                      decoration-success="to_return and is_lot_tracked"
+                      decoration-muted="is_lot_tracked and not to_return">
+
+                    <!-- Campos originales (ocultos y técnicos) -->
+                    <field name="move_quantity" column_invisible="1"/>
+                    <field name="move_id" column_invisible="True"/>
+                    <field name="is_lot_tracked" column_invisible="1"/>
+                    <field name="lot_delivered_qty" column_invisible="1"/>
+
+                    <!-- Checkbox para devolver -->
+                    <field name="to_return" string="✓" width="40px"/>
+
+                    <!-- Producto -->
+                    <field name="product_id" force_save="1" readonly="is_lot_tracked"/>
+
+                    <!-- Lote -->
+                    <field name="lot_id"
+                           string="Lote / Serie"
+                           options="{'no_create': True}"
+                           readonly="1"/>
+
+                    <!-- Campos del lote - info visual rápida -->
+                    <field name="lot_bloque" string="Bloque" optional="show"/>
+                    <field name="lot_numero_placa" string="No. Placa" optional="show"/>
+                    <field name="lot_atado" string="Atado" optional="hide"/>
+                    <field name="lot_grosor" string="Grosor" optional="show"/>
+                    <field name="lot_alto" string="Alto" optional="hide"/>
+                    <field name="lot_ancho" string="Ancho" optional="hide"/>
+                    <field name="lot_peso" string="Peso" optional="hide"/>
+                    <field name="lot_color" string="Color" optional="hide"/>
+                    <field name="lot_pedimento" string="Pedimento" optional="hide"/>
+                    <field name="lot_contenedor" string="Contenedor" optional="hide"/>
+                    <field name="lot_origen" string="Origen" optional="hide"/>
+                    <field name="lot_proveedor" string="Proveedor" optional="hide"/>
+                    <field name="lot_tipo" string="Tipo" optional="hide"/>
+                    <field name="lot_detalles" string="Nota" optional="hide"/>
+
+                    <!-- Cantidad a devolver -->
+                    <field name="quantity"
+                           string="Cantidad a Devolver"
+                           decoration-danger="move_quantity &lt; quantity"/>
+
+                    <!-- UdM -->
+                    <field name="uom_id" widget="many2one_uom" groups="uom.group_uom"/>
+                </list>
+            </xpath>
+
+        </field>
+    </record>
+
+</odoo>
