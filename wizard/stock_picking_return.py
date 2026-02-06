@@ -8,6 +8,22 @@ import json
 _logger = logging.getLogger(__name__)
 
 
+def _resolve_id(record):
+    """Obtiene el ID real de un registro, resolviendo NewId si es necesario."""
+    if hasattr(record, '_origin') and record._origin:
+        return record._origin.id
+    rid = record.id
+    if isinstance(rid, int):
+        return rid
+    # NewId object — extraer el integer
+    if hasattr(rid, 'origin'):
+        return rid.origin
+    try:
+        return int(rid)
+    except (TypeError, ValueError):
+        return False
+
+
 class StockReturnPickingLine(models.TransientModel):
     _inherit = 'stock.return.picking.line'
 
@@ -53,21 +69,28 @@ class StockReturnPickingLine(models.TransientModel):
                     line.to_return = False
                 continue
 
-            # No depender de is_lot_tracked -- checar directo del producto
             if line.move_id.product_id.tracking not in ('lot', 'serial'):
                 continue
 
+            # Construir mapa {real_lot_id: qty} desde move_lines
+            lot_qty_map = {}
+            for ml in line.move_id.move_line_ids:
+                if ml.state == 'done' and ml.lot_id:
+                    real_lot_id = ml.lot_id.id
+                    lot_qty_map[real_lot_id] = lot_qty_map.get(real_lot_id, 0.0) + ml.quantity
+
+            _logger.info('[LOT_RETURN] lot_qty_map from move_lines: %s', lot_qty_map)
+
             total = 0.0
             for lot in line.lot_ids:
-                mls = line.move_id.move_line_ids.filtered(
-                    lambda ml, l=lot: ml.lot_id.id == l.id and ml.state == 'done'
-                )
-                qty = sum(mls.mapped('quantity'))
-                total += qty
+                # Resolver NewId a ID real
+                real_id = _resolve_id(lot)
+                qty = lot_qty_map.get(real_id, 0.0)
                 _logger.info(
-                    '[LOT_RETURN] Lot %s (id=%s): qty=%s',
-                    lot.name, lot.id, qty,
+                    '[LOT_RETURN] Lot %s: NewId=%s -> real_id=%s, qty=%s',
+                    lot.name, lot.id, real_id, qty,
                 )
+                total += qty
 
             line.quantity = total
             line.to_return = total > 0
@@ -139,7 +162,6 @@ class StockReturnPicking(models.TransientModel):
                 new_lines.append((0, 0, vals))
                 continue
 
-            # === CON TRACKING ===
             done_move_lines = move.move_line_ids.filtered(
                 lambda ml: ml.state == 'done' and ml.lot_id
             )
@@ -213,18 +235,20 @@ class StockReturnPicking(models.TransientModel):
             saved_quantities[line.id] = line.quantity
             line.quantity = 0.0
 
-        # Construir mapa de lotes desde move_lines reales
         move_lot_map = {}
         for line in active_lot_lines:
+            # En action_create_returns los registros ya están guardados,
+            # lot.id debería ser int real
             assignments = []
             for lot in line.lot_ids:
+                real_id = _resolve_id(lot)
                 mls = line.move_id.move_line_ids.filtered(
-                    lambda ml, l=lot: ml.lot_id.id == l.id and ml.state == 'done'
+                    lambda ml, lid=real_id: ml.lot_id.id == lid and ml.state == 'done'
                 )
                 qty = sum(mls.mapped('quantity'))
                 if float_compare(qty, 0.0, precision_digits=4) > 0:
                     assignments.append({
-                        'lot_id': lot.id,
+                        'lot_id': real_id,
                         'quantity': qty,
                     })
 
