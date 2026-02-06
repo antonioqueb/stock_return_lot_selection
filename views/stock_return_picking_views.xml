@@ -12,8 +12,7 @@
             <xpath expr="//field[@name='product_return_moves']" position="before">
                 <div invisible="not has_lot_products" class="alert alert-info mb-2" role="alert">
                     <strong>📦 Productos con lotes detectados.</strong>
-                    Seleccione el lote a devolver y la cantidad se auto-completa.
-                    Use la casilla <strong>"✓"</strong> para desmarcar los que no desea devolver.
+                    Agregue o quite lotes con las etiquetas. La cantidad se calcula automáticamente.
                 </div>
                 <field name="has_lot_products" invisible="1"/>
             </xpath>
@@ -30,8 +29,9 @@
                     <field name="move_quantity" column_invisible="1"/>
                     <field name="move_id" column_invisible="True"/>
                     <field name="is_lot_tracked" column_invisible="1"/>
-                    <field name="lot_delivered_qty" column_invisible="1"/>
+                    <field name="lot_qty_json" column_invisible="1"/>
                     <field name="allowed_lot_ids" column_invisible="1"/>
+                    <field name="first_lot_id" column_invisible="1"/>
 
                     <!-- Checkbox -->
                     <field name="to_return" string="✓" width="40px"/>
@@ -39,13 +39,15 @@
                     <!-- Producto -->
                     <field name="product_id" force_save="1" readonly="is_lot_tracked"/>
 
-                    <!-- Lote con dominio filtrado a solo los de la entrega -->
-                    <field name="lot_id"
-                           string="Lote / Serie"
+                    <!-- Lotes como tags multi-selección, filtrado a lotes de la entrega -->
+                    <field name="lot_ids"
+                           string="Lotes a Devolver"
+                           widget="many2many_tags"
                            domain="[('id', 'in', allowed_lot_ids)]"
-                           options="{'no_create': True, 'no_open': True}"/>
+                           options="{'no_create': True, 'color_field': false}"
+                           width="300px"/>
 
-                    <!-- Campos del lote -->
+                    <!-- Campos info del primer lote (opcionales) -->
                     <field name="lot_bloque" string="Bloque" optional="show"/>
                     <field name="lot_numero_placa" string="No. Placa" optional="show"/>
                     <field name="lot_atado" string="Atado" optional="hide"/>
@@ -61,9 +63,9 @@
                     <field name="lot_tipo" string="Tipo" optional="hide"/>
                     <field name="lot_detalles" string="Nota" optional="hide"/>
 
-                    <!-- Cantidad -->
+                    <!-- Cantidad (auto-calculada) -->
                     <field name="quantity"
-                           string="Cantidad a Devolver"
+                           string="Cantidad Total"
                            decoration-danger="move_quantity &lt; quantity"/>
 
                     <!-- UdM -->
