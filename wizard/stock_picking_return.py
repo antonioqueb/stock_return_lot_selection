@@ -8,11 +8,9 @@ import json
 class StockReturnPickingLine(models.TransientModel):
     _inherit = 'stock.return.picking.line'
 
-    # ==================== CAMPOS DE LOTE ====================
     lot_ids = fields.Many2many(
         'stock.lot',
         string='Lotes a devolver',
-        help='Seleccione uno o más lotes a devolver',
     )
     allowed_lot_ids = fields.Many2many(
         'stock.lot',
@@ -20,52 +18,21 @@ class StockReturnPickingLine(models.TransientModel):
         'line_id', 'lot_id',
         string='Lotes permitidos',
         compute='_compute_allowed_lot_ids',
-        help='Lotes entregados en este movimiento',
     )
     to_return = fields.Boolean(
         string='Devolver',
         default=True,
-        help='Marcar para incluir en la devolución',
     )
-
-    # ==================== CAMPO AUXILIAR ====================
     is_lot_tracked = fields.Boolean(
         string='Rastreo por Lote',
         readonly=True,
     )
-
-    # JSON con {lot_id: qty} para saber cuánto corresponde a cada lote
     lot_qty_json = fields.Text(
-        string='Cantidades por Lote (JSON)',
-        help='Mapa interno de cantidad entregada por lote',
+        string='Cantidades por Lote',
     )
 
-    # ==================== CAMPOS RELATED DEL LOTE (info del primer lote seleccionado) ====================
-    # Estos se mantienen para las columnas opcionales, muestran info del primer lote
-    first_lot_id = fields.Many2one(
-        'stock.lot',
-        string='Primer Lote',
-        compute='_compute_first_lot_info',
-    )
-    lot_bloque = fields.Char(related='first_lot_id.x_bloque', string='Bloque', readonly=True)
-    lot_pedimento = fields.Char(related='first_lot_id.x_pedimento', string='Pedimento', readonly=True)
-    lot_grosor = fields.Char(related='first_lot_id.x_grosor', string='Grosor', readonly=True)
-    lot_alto = fields.Float(related='first_lot_id.x_alto', string='Alto (m)', readonly=True)
-    lot_ancho = fields.Float(related='first_lot_id.x_ancho', string='Ancho (m)', readonly=True)
-    lot_peso = fields.Float(related='first_lot_id.x_peso', string='Peso (kg)', readonly=True)
-    lot_numero_placa = fields.Integer(related='first_lot_id.x_numero_placa', string='No. Placa', readonly=True)
-    lot_atado = fields.Char(related='first_lot_id.x_atado', string='Atado', readonly=True)
-    lot_color = fields.Char(related='first_lot_id.x_color', string='Color', readonly=True)
-    lot_tipo = fields.Selection(related='first_lot_id.x_tipo', string='Tipo', readonly=True)
-    lot_detalles = fields.Text(related='first_lot_id.x_detalles_placa', string='Detalles', readonly=True)
-    lot_contenedor = fields.Char(related='first_lot_id.x_contenedor', string='Contenedor', readonly=True)
-    lot_origen = fields.Char(related='first_lot_id.x_origen', string='Origen', readonly=True)
-    lot_proveedor = fields.Char(related='first_lot_id.x_proveedor', string='Proveedor', readonly=True)
-
-    # ==================== COMPUTES ====================
     @api.depends('move_id')
     def _compute_allowed_lot_ids(self):
-        """Solo los lotes que están en la entrega original."""
         for line in self:
             if line.move_id and line.move_id.product_id.tracking in ('lot', 'serial'):
                 done_lines = line.move_id.move_line_ids.filtered(
@@ -75,57 +42,46 @@ class StockReturnPickingLine(models.TransientModel):
             else:
                 line.allowed_lot_ids = False
 
-    @api.depends('lot_ids')
-    def _compute_first_lot_info(self):
-        """Primer lote seleccionado para los campos related."""
-        for line in self:
-            line.first_lot_id = line.lot_ids[:1] if line.lot_ids else False
-
-    # ==================== ONCHANGE ====================
     @api.onchange('lot_ids')
     def _onchange_lot_ids(self):
-        """Al cambiar la selección de lotes, sumar cantidades correspondientes."""
         for line in self:
-            if not line.lot_ids or not line.is_lot_tracked:
-                if line.is_lot_tracked:
-                    line.quantity = 0.0
-                    line.to_return = False
+            if not line.is_lot_tracked:
+                continue
+            if not line.lot_ids:
+                line.quantity = 0.0
+                line.to_return = False
                 continue
 
-            # Obtener mapa de cantidades
-            lot_qty_map = {}
-            if line.lot_qty_json:
-                try:
-                    lot_qty_map = json.loads(line.lot_qty_json)
-                except (json.JSONDecodeError, TypeError):
-                    lot_qty_map = {}
-
-            # Sumar cantidades de los lotes seleccionados
+            lot_qty_map = self._get_lot_qty_map(line)
             total = 0.0
             for lot in line.lot_ids:
                 lot_key = str(lot.id)
                 if lot_key in lot_qty_map:
                     total += lot_qty_map[lot_key]
                 elif line.move_id:
-                    # Fallback: calcular desde move_lines
-                    move_lines = line.move_id.move_line_ids.filtered(
-                        lambda ml: ml.lot_id == lot and ml.state == 'done'
+                    mls = line.move_id.move_line_ids.filtered(
+                        lambda ml: ml.lot_id.id == lot.id and ml.state == 'done'
                     )
-                    total += sum(move_lines.mapped('quantity'))
-
+                    total += sum(mls.mapped('quantity'))
             line.quantity = total
             line.to_return = total > 0
 
     @api.onchange('to_return')
     def _onchange_to_return(self):
-        """Al desmarcar, poner cantidad en 0."""
         for line in self:
             if line.is_lot_tracked:
                 if not line.to_return:
                     line.quantity = 0.0
                 elif line.lot_ids:
-                    # Restaurar: recalcular desde lotes
                     line._onchange_lot_ids()
+
+    def _get_lot_qty_map(self, line):
+        if line.lot_qty_json:
+            try:
+                return json.loads(line.lot_qty_json)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return {}
 
 
 class StockReturnPicking(models.TransientModel):
@@ -133,7 +89,6 @@ class StockReturnPicking(models.TransientModel):
 
     has_lot_products = fields.Boolean(
         compute='_compute_has_lot_products',
-        string='Tiene productos con lotes',
     )
 
     @api.depends('product_return_moves.is_lot_tracked')
@@ -145,13 +100,6 @@ class StockReturnPicking(models.TransientModel):
 
     @api.model
     def default_get(self, fields_list):
-        """
-        Extiende default_get:
-        - Productos sin tracking: línea normal (sin cambios)
-        - Productos con tracking: una línea por producto con lot_ids pre-llenados
-          con TODOS los lotes de la entrega, cantidad = suma total,
-          y lot_qty_json con el mapa de cantidades por lote.
-        """
         res = super().default_get(fields_list)
 
         if 'product_return_moves' not in fields_list:
@@ -199,10 +147,8 @@ class StockReturnPicking(models.TransientModel):
 
             lot_qty_map = {}
             for ml in done_move_lines:
-                lot = ml.lot_id
-                if lot.id not in lot_qty_map:
-                    lot_qty_map[lot.id] = 0.0
-                lot_qty_map[lot.id] += ml.quantity
+                lid = ml.lot_id.id
+                lot_qty_map[lid] = lot_qty_map.get(lid, 0.0) + ml.quantity
 
             if not lot_qty_map:
                 vals['is_lot_tracked'] = True
@@ -210,10 +156,8 @@ class StockReturnPicking(models.TransientModel):
                 new_lines.append((0, 0, vals))
                 continue
 
-            # Descontar devoluciones previas
             returned_by_lot = self._get_returned_qty_by_lot(move)
 
-            # Calcular remaining por lote
             lot_ids_to_select = []
             lot_qty_remaining = {}
             total_remaining = 0.0
@@ -243,7 +187,6 @@ class StockReturnPicking(models.TransientModel):
         return res
 
     def _get_returned_qty_by_lot(self, original_move):
-        """Cuánto se ha devuelto previamente por lote."""
         returned_moves = self.env['stock.move'].search([
             ('origin_returned_move_id', '=', original_move.id),
             ('state', '=', 'done'),
@@ -258,12 +201,6 @@ class StockReturnPicking(models.TransientModel):
         return result
 
     def action_create_returns(self):
-        """
-        Extiende para:
-        1. Poner en 0 las líneas desmarcadas
-        2. Ejecutar wizard estándar
-        3. Asignar lotes específicos al picking de devolución
-        """
         self.ensure_one()
 
         lot_lines = self.product_return_moves.filtered(
@@ -277,15 +214,9 @@ class StockReturnPicking(models.TransientModel):
             saved_quantities[line.id] = line.quantity
             line.quantity = 0.0
 
-        # Mapa de lotes y cantidades para asignar después
         move_lot_map = {}
         for line in active_lot_lines:
-            lot_qty_map = {}
-            if line.lot_qty_json:
-                try:
-                    lot_qty_map = json.loads(line.lot_qty_json)
-                except (json.JSONDecodeError, TypeError):
-                    lot_qty_map = {}
+            lot_qty_map = line._get_lot_qty_map(line)
 
             assignments = []
             for lot in line.lot_ids:
@@ -293,11 +224,10 @@ class StockReturnPicking(models.TransientModel):
                 if lot_key in lot_qty_map:
                     qty = lot_qty_map[lot_key]
                 else:
-                    # Fallback
-                    move_lines = line.move_id.move_line_ids.filtered(
-                        lambda ml: ml.lot_id == lot and ml.state == 'done'
+                    mls = line.move_id.move_line_ids.filtered(
+                        lambda ml: ml.lot_id.id == lot.id and ml.state == 'done'
                     )
-                    qty = sum(move_lines.mapped('quantity'))
+                    qty = sum(mls.mapped('quantity'))
 
                 if float_compare(qty, 0.0, precision_digits=4) > 0:
                     assignments.append({
@@ -308,7 +238,6 @@ class StockReturnPicking(models.TransientModel):
             if assignments:
                 move_lot_map[line.move_id.id] = assignments
 
-        # Validar
         total_to_return = sum(l.quantity for l in active_lot_lines)
         total_no_lot = sum(
             l.quantity for l in self.product_return_moves
@@ -332,7 +261,6 @@ class StockReturnPicking(models.TransientModel):
         return result
 
     def _assign_lots_to_return_picking(self, picking_id, move_lot_map):
-        """Crea una move_line por cada lote seleccionado en el picking de devolución."""
         picking = self.env['stock.picking'].browse(picking_id)
         if not picking.exists():
             return
@@ -343,7 +271,6 @@ class StockReturnPicking(models.TransientModel):
                 continue
 
             lot_assignments = move_lot_map[original_move_id]
-
             move.move_line_ids.unlink()
 
             for assignment in lot_assignments:
