@@ -40,7 +40,12 @@ class StockReturnPickingLine(models.TransientModel):
     )
     to_return = fields.Boolean(
         string='Devolver',
+        compute='_compute_to_return',
+        store=True,
+        readonly=False,
         default=True,
+        help='Con lotes seleccionados se palomea solo; desmárcalo para '
+             'excluir la línea de la devolución.',
     )
     is_lot_tracked = fields.Boolean(
         string='Rastreo por Lote',
@@ -48,6 +53,19 @@ class StockReturnPickingLine(models.TransientModel):
     lot_qty_json = fields.Text(
         string='Cantidades por Lote',
     )
+
+    @api.depends('lot_ids', 'is_lot_tracked')
+    def _compute_to_return(self):
+        """El checkbox sigue a los lotes: línea rastreada CON lotes
+        preseleccionados nace palomeada (el prellenado del wizard dejaba
+        el check apagado); quitar todos los lotes la despalomea. Las no
+        rastreadas nacen palomeadas. Editable: el usuario puede
+        desmarcar y su elección se respeta hasta que cambien los lotes."""
+        for line in self:
+            if line.is_lot_tracked:
+                line.to_return = bool(line.lot_ids)
+            else:
+                line.to_return = True
 
     @api.depends('move_id')
     def _compute_allowed_lot_ids(self):
