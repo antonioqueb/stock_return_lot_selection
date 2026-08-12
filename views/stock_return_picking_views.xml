@@ -10,8 +10,8 @@
 
             <xpath expr="//field[@name='product_return_moves']" position="before">
                 <div invisible="not has_lot_products" class="alert alert-info mb-2" role="alert">
-                    <strong>📦 Productos con lotes detectados.</strong>
-                    Agregue o quite lotes con las etiquetas. La cantidad se calcula automáticamente.
+                    <strong>📦 Todos los lotes vienen preseleccionados.</strong>
+                    QUITE las etiquetas de los lotes que NO se devuelven; la cantidad se recalcula sola.
                 </div>
                 <field name="has_lot_products" invisible="1"/>
             </xpath>

@@ -120,6 +120,45 @@ class StockReturnPicking(models.TransientModel):
                 line.is_lot_tracked for line in wizard.product_return_moves
             )
 
+    def _prepare_stock_return_picking_line_vals_from_move(self, stock_move):
+        """PRE-LLENADO EN EL CAMINO REAL (Odoo 19): product_return_moves es
+        COMPUTADO — el compute del core reconstruye las líneas al abrir el
+        wizard y pisaba el prellenado del default_get (líneas en 0.00 y sin
+        lotes). Este helper es el que usa ese compute para armar cada línea:
+        aquí TODOS los lotes pendientes de devolver llegan preseleccionados
+        y el flujo del usuario es QUITAR los que no se devuelven."""
+        vals = super()._prepare_stock_return_picking_line_vals_from_move(
+            stock_move)
+        if stock_move.product_id.tracking not in ('lot', 'serial'):
+            vals['is_lot_tracked'] = False
+            vals.setdefault('to_return', True)
+            return vals
+
+        done = stock_move.move_line_ids.filtered(
+            lambda ml: ml.state == 'done' and ml.lot_id)
+        lot_qty_map = {}
+        for ml in done:
+            lid = ml.lot_id.id
+            lot_qty_map[lid] = lot_qty_map.get(lid, 0.0) + ml.quantity
+
+        returned_by_lot = self._get_returned_qty_by_lot(stock_move)
+        lot_ids, remaining_map, total = [], {}, 0.0
+        for lid, delivered in lot_qty_map.items():
+            remaining = delivered - returned_by_lot.get(lid, 0.0)
+            if float_compare(remaining, 0.0, precision_digits=4) > 0:
+                lot_ids.append(lid)
+                remaining_map[str(lid)] = remaining
+                total += remaining
+
+        vals.update({
+            'is_lot_tracked': True,
+            'to_return': bool(lot_ids),
+            'lot_ids': [(6, 0, lot_ids)],
+            'quantity': total,
+            'lot_qty_json': json.dumps(remaining_map),
+        })
+        return vals
+
     @api.model
     def default_get(self, fields_list):
         res = super().default_get(fields_list)
