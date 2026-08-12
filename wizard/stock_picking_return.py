@@ -160,13 +160,46 @@ class StockReturnPicking(models.TransientModel):
             lot_qty_map[lid] = lot_qty_map.get(lid, 0.0) + ml.quantity
 
         returned_by_lot = self._get_returned_qty_by_lot(stock_move)
+
+        # LOTES VENDIDOS FUERA DEL PRELLENADO: un lote comprometido en una
+        # venta viva (lot_ids de la orden o move lines activas de venta) NO
+        # se preselecciona — devolverlo chocaría con la entrega (candado de
+        # lote duplicado). Sigue en los permitidos: agregarlo a mano es una
+        # decisión consciente.
+        sold_lot_ids = set()
+        Sol = self.env['sale.order.line'].sudo()
+        if 'lot_ids' in Sol._fields and lot_qty_map:
+            sols = Sol.search([
+                ('lot_ids', 'in', list(lot_qty_map.keys())),
+                ('order_id.state', 'in', ('draft', 'sent', 'sale')),
+            ])
+            for sol in sols:
+                sold_lot_ids.update(sol.lot_ids.ids)
+        if lot_qty_map:
+            sale_mls = self.env['stock.move.line'].sudo().search([
+                ('lot_id', 'in', list(lot_qty_map.keys())),
+                ('state', 'not in', ('done', 'cancel')),
+                ('move_id.sale_line_id', '!=', False),
+            ])
+            sold_lot_ids.update(sale_mls.mapped('lot_id').ids)
+
         lot_ids, remaining_map, total = [], {}, 0.0
+        skipped_sold = []
         for lid, delivered in lot_qty_map.items():
             remaining = delivered - returned_by_lot.get(lid, 0.0)
-            if float_compare(remaining, 0.0, precision_digits=4) > 0:
-                lot_ids.append(lid)
-                remaining_map[str(lid)] = remaining
-                total += remaining
+            if float_compare(remaining, 0.0, precision_digits=4) <= 0:
+                continue
+            if lid in sold_lot_ids:
+                skipped_sold.append(lid)
+                continue
+            lot_ids.append(lid)
+            remaining_map[str(lid)] = remaining
+            total += remaining
+        if skipped_sold:
+            _logger.info(
+                '[LOT_RETURN] Prellenado omite %d lote(s) comprometidos en '
+                'ventas vivas (move %s): %s',
+                len(skipped_sold), stock_move.id, skipped_sold)
 
         vals.update({
             'is_lot_tracked': True,
